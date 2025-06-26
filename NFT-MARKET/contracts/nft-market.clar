@@ -7,6 +7,7 @@
 (define-constant err-not-owner (err u302))
 (define-constant err-insufficient-payment (err u303))
 (define-constant err-listing-expired (err u304))
+(define-constant err-fee-too-high (err u305))
 
 (define-data-var listing-counter uint u0)
 (define-data-var marketplace-fee uint u250) ;; 2.5% fee
@@ -31,20 +32,17 @@
 (define-data-var total-sales uint u0)
 
 (define-read-only (get-listing (listing-id uint))
-  (map-get? listings listing-id)
-)
+  (map-get? listings listing-id))
 
 (define-read-only (get-marketplace-fee)
-  (var-get marketplace-fee)
-)
+  (var-get marketplace-fee))
 
 (define-read-only (get-marketplace-stats)
   {
     total-volume: (var-get total-volume),
     total-sales: (var-get total-sales),
     active-listings: (var-get listing-counter)
-  }
-)
+  })
 
 (define-public (create-listing (nft-contract principal) (token-id uint) (price uint) (duration uint))
   (let ((listing-id (+ (var-get listing-counter) u1)))
@@ -54,31 +52,25 @@
       nft-contract: nft-contract,
       token-id: token-id,
       price: price,
-      expiry: (+ block-height duration),
+      expiry: (+ stacks-block-height duration),
       active: true
     })
     (var-set listing-counter listing-id)
-    (ok listing-id)
-  )
-)
+    (ok listing-id)))
 
 (define-public (update-listing (listing-id uint) (new-price uint))
   (let ((listing (unwrap! (get-listing listing-id) err-listing-not-found)))
     (asserts! (is-eq tx-sender (get seller listing)) err-not-owner)
     (asserts! (get active listing) err-listing-not-found)
-    (asserts! (< block-height (get expiry listing)) err-listing-expired)
+    (asserts! (< stacks-block-height (get expiry listing)) err-listing-expired)
     (map-set listings listing-id (merge listing {price: new-price}))
-    (ok true)
-  )
-)
+    (ok true)))
 
 (define-public (cancel-listing (listing-id uint))
   (let ((listing (unwrap! (get-listing listing-id) err-listing-not-found)))
     (asserts! (is-eq tx-sender (get seller listing)) err-not-owner)
     (map-set listings listing-id (merge listing {active: false}))
-    (ok true)
-  )
-)
+    (ok true)))
 
 (define-public (buy-nft (listing-id uint))
   (let ((listing (unwrap! (get-listing listing-id) err-listing-not-found))
@@ -86,7 +78,7 @@
         (fee (/ (* price (var-get marketplace-fee)) u10000))
         (seller-amount (- price fee)))
     (asserts! (get active listing) err-listing-not-found)
-    (asserts! (< block-height (get expiry listing)) err-listing-expired)
+    (asserts! (< stacks-block-height (get expiry listing)) err-listing-expired)
     
     ;; Transfer payment to seller
     (try! (stx-transfer? seller-amount tx-sender (get seller listing)))
@@ -102,28 +94,26 @@
       seller: (get seller listing),
       buyer: tx-sender,
       price: price,
-      block-height: block-height
+      block-height: stacks-block-height
     })
     
     ;; Update stats
     (var-set total-volume (+ (var-get total-volume) price))
     (var-set total-sales (+ (var-get total-sales) u1))
     
-    (ok true)
-  )
-)
+    (ok true)))
 
 (define-public (set-marketplace-fee (new-fee uint))
-  (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-  (asserts! (<= new-fee u1000) (err u305)) ;; Max 10% fee
-  (var-set marketplace-fee new-fee)
-  (ok true)
-)
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (<= new-fee u1000) err-fee-too-high)
+    (var-set marketplace-fee new-fee)
+    (ok true)))
 
 (define-public (withdraw-fees)
-  (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-  (let ((balance (stx-get-balance (as-contract tx-sender))))
-    (try! (as-contract (stx-transfer? balance tx-sender contract-owner)))
-    (ok balance)
-  )
-)
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (let ((balance (stx-get-balance (as-contract tx-sender))))
+      (try! (as-contract (stx-transfer? balance tx-sender contract-owner)))
+      (ok balance))))
+      
